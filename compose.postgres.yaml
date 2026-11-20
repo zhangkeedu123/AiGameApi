@@ -1,0 +1,45 @@
+services:
+  api:
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD for the new PostgreSQL container}
+    volumes:
+      - type: bind
+        source: ${PG_DATA_DIR:-/srv/jinyao/postgres/data}
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  db-init:
+    image: postgres:17
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD for the new PostgreSQL container}
+      JINYAO_DB_PASSWORD: ${JINYAO_DB_PASSWORD:?set JINYAO_DB_PASSWORD for the application role}
+    volumes:
+      - type: bind
+        source: ./db
+        target: /sql
+        read_only: true
+        bind:
+          create_host_path: false
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        psql -X -h db -U postgres -d postgres -v ON_ERROR_STOP=1 \
+          -v db_name=jinyao -v app_role=jinyao_app -f /sql/00_create_database.sql
+        PGPASSWORD="$$JINYAO_DB_PASSWORD" \
+          psql -X -h db -U jinyao_app -d jinyao -v ON_ERROR_STOP=1 -f /sql/01_init_schema.sql

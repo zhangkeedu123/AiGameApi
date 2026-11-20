@@ -1,0 +1,6 @@
+.env
+.env.docker
+.venv/
+.deps/
+__pycache__/
+var/
