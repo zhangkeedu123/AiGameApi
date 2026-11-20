@@ -12,7 +12,9 @@ from app.services.players import (
 )
 from app.services.progress import read_progress
 
-router = APIRouter(prefix="/admin")
+# 后台是服务端渲染的 HTML 表单页，不是 JSON 接口：不进入 OpenAPI，
+# 免得前端在 Swagger 里把 /admin/* 当成可调用的 API（它们需要会话和 CSRF）。
+router = APIRouter(prefix="/admin", include_in_schema=False)
 
 
 def h(value):

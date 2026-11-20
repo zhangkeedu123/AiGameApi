@@ -1,6 +1,16 @@
 # 金缮夜馆后端
 
-使用 FastAPI、asyncpg 和 PostgreSQL。管理员在 `/admin` 管理关卡、玩家和联调令牌，小游戏通过 `/api/v1` 读取关卡并保存进度。API 的交互文档位于 `/docs`。
+使用 FastAPI、asyncpg 和 PostgreSQL。管理员在 `/admin` 管理关卡、玩家和联调令牌，小游戏通过 `/api/v1` 读取关卡并保存进度。
+
+接口文档有三个入口，内容同源：
+
+| 入口 | 用途 |
+| --- | --- |
+| `/docs` | Swagger UI，可直接发请求；静态资源随镜像分发，不依赖外网 CDN |
+| `/openapi.json` | OpenAPI 3.1 描述，可导入 Apifox / Postman / 代码生成器 |
+| `/api.md` | 纯文本联调指南：接口清单、curl 示例、存档并发规则、常见坑，适合直接贴给 AI |
+
+逐接口说明写在 `app/routes/api.py` 的 `summary` / `description` 里，跨接口约定（鉴权、错误结构、坐标系）与分组说明集中在 `app/openapi.py`，纯文本指南在 `app/api_guide.py`。改接口后需要同步这三处，否则文档与实现不一致。`/admin` 是服务端渲染的 HTML 页面，需要会话与 CSRF，不列入 OpenAPI。
 
 ## Linux Docker 部署
 

@@ -4,3 +4,6 @@
 .deps/
 __pycache__/
 var/
+
+# 部署时生成的临时文件
+.db_pwd.tmp
