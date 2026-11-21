@@ -1,4 +1,4 @@
-# 金缮夜馆后端
+# 金缮夜馆后端11
 
 使用 FastAPI、asyncpg 和 PostgreSQL。管理员在 `/admin` 管理关卡、玩家和联调令牌，小游戏通过 `/api/v1` 读取关卡并保存进度。
 
