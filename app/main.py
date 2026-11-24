@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -77,6 +78,17 @@ def create_app(settings: Settings | None = None):
         max_age=4 * 60 * 60, path="/admin",
     )
     app.add_middleware(PrivateResponseHeaders)
+    # 最后添加的中间件在最外层：预检请求要在会话和响应头处理之前就被 CORS 拦下。
+    # 小游戏用 Bearer 令牌、不依赖 Cookie，所以 allow_credentials 保持关闭。
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(settings.cors_origins),
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+        expose_headers=["Content-Length"],
+        max_age=600,
+    )
     app.include_router(admin.router)
     app.include_router(api.router)
 
