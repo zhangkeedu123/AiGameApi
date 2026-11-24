@@ -96,41 +96,11 @@ python -m venv .venv
 
 管理员创建命令会隐藏密码输入并二次确认。重启时保持同一个 `SESSION_SECRET`。默认上传目录为 `var/uploads`，需与数据库一起持久化。默认错误日志为 `var/logs/errors.log`，5 MiB 轮转并保留 3 份归档。500 响应的 `error_id` 可用于匹配异常堆栈。单个 Uvicorn worker 通过异步连接池处理并发请求。部署多个进程时给每个进程设置独立的 `ERROR_LOG`，多个实例需共享持久化图集目录。HTTPS 反代需传递可信的主机和协议，以生成正确的图集 URL，并将请求体限制设为 13 MiB。
 
-## 管理后台联调
+## 管理后台
 
-登录 `http://127.0.0.1:8000/admin`，上传 [三片关卡 JSON](examples/three-shards.json) 和 [PNG 图集](examples/three-shards.png)。打开草稿查看图集并发布。再次上传该示例可生成第二关，用于检查顺序解锁。打开玩家页面创建玩家，进入详情页签发或轮换令牌并复制本次显示的值。
+管理页面位于同级 `AiGameAdmin`，请按该项目的 README 启动。API 保留 `/admin/*` 的 JSON 管理接口。先请求 `GET /admin/session` 获取会话和 CSRF，提交表单登录后使用新的 CSRF。所有后续写请求用 `X-CSRF-Token` 头。
 
-下面是等价的 HTTP 请求示例。浏览器提交的写操作需要会话 Cookie 和表单中的 `csrf`。登录会重置 CSRF，登录后需重新读取。请求示例沿用同一个 `$session`。
-
-```powershell
-$base = 'http://127.0.0.1:8000'
-$page = Invoke-WebRequest -UseBasicParsing "$base/admin/login" -SessionVariable session
-$csrf = [regex]::Match($page.Content, 'name="csrf" value="([^"]+)"').Groups[1].Value
-$adminCredential = Get-Credential -UserName admin -Message '输入管理员账号和密码'
-$page = Invoke-WebRequest -UseBasicParsing "$base/admin/login" -WebSession $session -Method Post -Body @{
-    username = $adminCredential.UserName
-    password = $adminCredential.GetNetworkCredential().Password
-    csrf = $csrf
-}
-$csrf = [regex]::Match($page.Content, 'name="csrf" value="([^"]+)"').Groups[1].Value
-$cookie = $session.Cookies.GetCookieHeader([uri]"$base/admin/levels")
-
-# 303 响应的 Location 提供草稿地址。后续 POST 使用该地址发布。
-curl.exe -i -b $cookie -F "csrf=$csrf" -F "atlas=@examples/three-shards.png;type=image/png" -F "config=@examples/three-shards.json;type=application/json" "$base/admin/levels"
-$adminLevel = '/admin/levels/替换为草稿ID'
-curl.exe -i -b $cookie --data-urlencode "csrf=$csrf" "$base$adminLevel/publish"
-
-# 303 响应的 Location 提供玩家地址。签发响应的 issued-token 元素包含令牌。
-curl.exe -i -b $cookie --data-urlencode "csrf=$csrf" --data-urlencode 'nickname=demo' "$base/admin/users"
-$adminUser = '/admin/users/替换为玩家ID'
-curl.exe -s -b $cookie --data-urlencode "csrf=$csrf" "$base$adminUser/tokens"
-# 玩家的联调结束后，可撤销当前令牌
-# curl.exe -i -b $cookie --data-urlencode "csrf=$csrf" "$base$adminUser/tokens/revoke"
-```
-
-单个玩家同一时刻有一个有效联调令牌。重新签发会替换旧令牌。正式的微信和抖音登录、账号绑定、旧客户端存档导入与小游戏源码接入另行安排。联调令牌仅用于测试，勿打包进小游戏。
-
-后台创建玩家时可填写来源、OpenID 和头像地址，也可在玩家详情补填或修改。来源的接口值为 `wechat` 或 `douyin`，分别对应微信和抖音。填写 OpenID 时需同时指定来源。
+单图上传由管理员调用 `POST /admin/levels/generate`，字段为 `image`、`name`、`pieces`、`rotate`。旧图集加 JSON 可继续用 `POST /admin/levels`。发布后小游戏可获取图集和关卡；删除草稿清理图集，删除已发布关卡执行下架并保留历史。
 
 ## 小游戏 API
 
@@ -186,3 +156,13 @@ Invoke-RestMethod "$base/api/v1/me/progress" -Headers $auth
 $env:TEST_DATABASE_URL = 'postgresql://jinyao_app:replace_me@127.0.0.1:5432/jinyao_test'
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
+
+## Windows 本地 npm 启动
+
+在本地 `.env` 填写 `LOCAL_DATABASE_HOST=服务器数据库地址`，并在 `.env.docker` 配置数据库连接串和 `SESSION_SECRET`。`npm start` 使用 `.env` 指定的数据库主机，沿用连接串里的端口、库名和账号凭据。
+
+```powershell
+npm start
+```
+
+在另一个 PowerShell 窗口执行 `npm stop` 可以停止本地 API，也可以在运行窗口按 `Ctrl+C`。需要用 Docker 启动或停止时，分别运行 `npm run start:docker` 和 `npm run stop:docker`。

@@ -113,7 +113,7 @@ AUTH_RESPONSE = {
 async def list_levels(request: Request):
     rows = await request.app.state.db.fetch(
         """SELECT id, name, sort_order, published_at, config->>'difficulty' AS difficulty
-           FROM levels WHERE status = 'published' ORDER BY sort_order"""
+           FROM levels WHERE status = 'published' AND config->>'archived' IS DISTINCT FROM 'true' ORDER BY sort_order"""
     )
     return [dict(row) for row in rows]
 
@@ -159,7 +159,7 @@ async def published_level(request, level_id):
 | `shards[].poly` | number[] | 多边形，交替 `x, y`，≥ 3 点 |
 | `shards[].sprite` | `[x, y, w, h]` | 图集裁剪矩形 |
 | `seams[]` | `{ids:[a,b], poly:[...]}` | 裂边邻接关系 |
-| `points` | `[[x, y], ...]` | 描金点，固定 3 个 |
+| `points` | `[[x, y], ...]` | 描金点，可为空或固定 3 个 |
 
 坐标为图稿坐标系：图集 `400 × 450`，原点左上角，`y` 轴向下。
 """,
@@ -296,9 +296,10 @@ async def get_progress(request: Request, user_id: Player):
 | 字段 | 约束 |
 | --- | --- |
 | `groups[]` | 1–256 组；所有 `ids` 必须**无重复地覆盖** `0..碎片数-1` |
-| `groups[].x` / `y` | `0 ≤ x ≤ 400`、`0 ≤ y ≤ 590`（拼图板比图集高） |
+| `groups[].x` / `y` | `-450 ≤ x ≤ 850`、`-450 ≤ y ≤ 1040`（拼图板比图集高） |
 | `groups[].turn` | 0–3，旋转 90° 的次数 |
 | `paint[]` | 描金点索引，≤ 3 个且不重复；**仅当只剩一组碎片时可为非空** |
+| `assembly_only` | 可选。在线关卡客户端以拼齐为通关，传 true |
 | `revision` | 首次保存填 `0`；之后必须等于上次响应的 `revision` |
 
 服务端行为：
@@ -306,7 +307,7 @@ async def get_progress(request: Request, user_id: Player):
 * `revision` 不等于库里的值 → **409**，前端应重新 `GET /me/progress` 合并后再存。
 * 同一 `revision` + 同一快照重复提交是幂等的，返回已存记录，可安全重试超时请求。
 * 保存成功会同时把该关设为玩家的 `current_level_id`，返回 `revision + 1`。
-* 三个金点全部点亮且只剩一组碎片时判定通关，写入 `first_completed_at`。
+* 只剩一组碎片，且描金完成、关卡无金点或使用拼齐即通关选项时判定通关，写入 `first_completed_at`。
 * 关卡未发布 → 404；上一关未通关 → 403（关卡按 `sort_order` 顺序解锁）。
 """,
     response_description="保存后的存档对象（`revision` 已递增）",

@@ -55,6 +55,8 @@ def validate_upload(png, config_json):
     config.name = config.name.strip()
     if not config.name or any("\0" in value for value in (config.name, config.difficulty, config.story)):
         invalid("name / difficulty / story", "名称不能为空，文本不得包含空字符")
+    if len(config.points) not in (0, 3):
+        invalid("points", "无需描金用空数组，描金关卡必须配置三个点")
     rectangle("poster", config.poster, size)
     if config.poster[2:] != (400, 450):
         invalid("poster", "完整瓷器裁剪尺寸必须为 400 × 450")
@@ -92,6 +94,10 @@ async def upload_level(db, directory: Path, atlas, config_file):
     if len(config_json) > CONFIG_LIMIT:
         invalid("config", "JSON 最大 512 KiB")
     config = await run_in_threadpool(validate_upload, png, config_json)
+    return await store_level(db, directory, png, config)
+
+
+async def store_level(db, directory, png, config):
     level_id = uuid4()
     key = f"{level_id}.png"
     path = directory / key
@@ -114,7 +120,7 @@ async def publish_level(db, level_id):
     async with db.acquire() as conn, conn.transaction():
         # 只串行化发布操作，确保发布顺序连续且不同管理员不会取到同一编号。
         await conn.execute("SELECT pg_advisory_xact_lock(421903, 1)")
-        row = await conn.fetchrow("SELECT status FROM levels WHERE id = $1", level_id)
+        row = await conn.fetchrow("SELECT status FROM levels WHERE id = $1 FOR UPDATE", level_id)
         if row is None:
             raise HTTPException(404, "关卡不存在")
         if row["status"] == "published":

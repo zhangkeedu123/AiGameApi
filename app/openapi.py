@@ -194,7 +194,7 @@ def build_openapi(app):
         if scheme.get("scheme") == "bearer":
             scheme.setdefault(
                 "description",
-                "玩家联调令牌。管理员在 /admin/users/{玩家 ID} 页面签发，明文只显示一次；"
+                "玩家联调令牌。管理员在 AiGameAdmin 玩家管理中签发，明文只显示一次；"
                 "请求头写法：Authorization: Bearer <令牌>",
             )
 
