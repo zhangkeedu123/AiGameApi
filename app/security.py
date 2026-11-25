@@ -14,9 +14,11 @@ def token_digest(token):
 
 
 def hash_password(password):
+    if len(password) < 6:
+        raise ValueError("密码至少需要 6 个字符")
     raw = password.encode()
-    if not 12 <= len(raw) <= 72:
-        raise ValueError("密码需要 12 至 72 个 UTF-8 字节")
+    if len(raw) > 72:
+        raise ValueError("密码不能超过 72 个 UTF-8 字节")
     return bcrypt.hashpw(raw, bcrypt.gensalt()).decode()
 
 

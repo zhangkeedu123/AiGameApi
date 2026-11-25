@@ -1,10 +1,33 @@
+# 环境变量与密钥：一律不入库，示例文件除外
 .env
-.env.docker
+.env.*
+!.env.example
+!.env.docker.example
+
+# Python
 .venv/
 .deps/
 __pycache__/
-var/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# 部署时生成的临时文件
+# Node（本地启动脚本用）
+node_modules/
+
+# 运行期产物
+var/
+dist/
+build/
+*.log
+*.pid
+
+# 部署与数据库临时文件
 .db_pwd.tmp
-.env.local
+
+# 编辑器与系统杂项
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

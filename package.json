@@ -1,0 +1,10 @@
+{
+  "name": "jinyao-game-api",
+  "private": true,
+  "scripts": {
+    "start": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start-local.ps1",
+    "stop": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start-local.ps1 -Stop",
+    "start:docker": "docker compose --env-file .env.docker up -d --build --wait",
+    "stop:docker": "docker compose --env-file .env.docker stop"
+  }
+}

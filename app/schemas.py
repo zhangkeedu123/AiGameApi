@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat
@@ -39,19 +39,20 @@ class LevelConfig(InputModel):
     outline: list[Coordinate]
     shards: Annotated[list[Shard], Field(min_length=1, max_length=256)]
     seams: list[Seam]
-    points: Annotated[list[Point], Field(min_length=3, max_length=3)]
+    points: Annotated[list[Point], Field(max_length=3)]
 
 
 class Group(InputModel):
     ids: Annotated[list[Index], Field(min_length=1, max_length=256)]
-    x: Annotated[Coordinate, Field(ge=0, le=400)]
-    y: Annotated[Coordinate, Field(ge=0, le=590)]
+    x: Annotated[Coordinate, Field(ge=-450, le=850)]
+    y: Annotated[Coordinate, Field(ge=-450, le=1040)]
     turn: Turn
 
 
 class ProgressInput(InputModel):
     groups: Annotated[list[Group], Field(min_length=1, max_length=256)]
     paint: Annotated[list[Index], Field(max_length=3)]
+    assembly_only: bool = False
     revision: Annotated[int, Field(ge=0, le=9223372036854775807)]
 
 
@@ -63,3 +64,13 @@ class PlayerProfile(BaseModel):
     last_login_at: datetime | None
     login_count: int
     avatar_url: str | None
+
+
+class GuestLogin(InputModel):
+    device_id: Annotated[str, Field(min_length=8, max_length=120, pattern=r"^[A-Za-z0-9_-]+$")]
+    nickname: Annotated[str, Field(min_length=1, max_length=80)] | None = None
+    source: Literal["wechat", "douyin"] = "wechat"
+
+
+class GuestSession(PlayerProfile):
+    token: str

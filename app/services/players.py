@@ -68,6 +68,21 @@ async def record_login(db, user_id):
     return dict(updated)
 
 
+async def guest_user(db, device_id, nickname, source):
+    """按设备号找回或创建一个玩家，openid 记作 guest:<device_id>，用于免登录联调与本机存档。"""
+    openid = "guest:" + device_id
+    async with db.acquire() as conn, conn.transaction():
+        row = await conn.fetchrow(
+            """INSERT INTO users (id, nickname, active, created_at, source, openid, login_count)
+               VALUES ($1, $2, true, $3, $4, $5, 0)
+               ON CONFLICT (source, openid) WHERE openid IS NOT NULL
+               DO UPDATE SET nickname = COALESCE(users.nickname, EXCLUDED.nickname)
+               RETURNING id, active""",
+            uuid4(), nickname, datetime.now(UTC), source, openid,
+        )
+    return row["id"], row["active"]
+
+
 async def update_token(db, user_id, token=None):
     async with db.acquire() as conn, conn.transaction():
         # 对同一玩家的签发、轮换和撤销按事务顺序执行。

@@ -11,17 +11,12 @@ class Settings:
     error_log: Path
     cookie_secure: bool = True
     pool_max: int = 10
-    # 小游戏不走 Cookie，跨域只需要放行来源；默认放开，部署时用 CORS_ORIGINS 收窄。
-    cors_origins: tuple[str, ...] = ("*",)
 
     @classmethod
     def from_env(cls):
         secret = os.environ["SESSION_SECRET"]
         if len(secret) < 32:
             raise ValueError("SESSION_SECRET must be at least 32 characters")
-        origins = tuple(
-            item.strip() for item in os.getenv("CORS_ORIGINS", "*").split(",") if item.strip()
-        )
         return cls(
             os.environ["DATABASE_URL"],
             secret,
@@ -29,5 +24,4 @@ class Settings:
             Path(os.getenv("ERROR_LOG", "var/logs/errors.log")).resolve(),
             os.getenv("COOKIE_SECURE", "true").lower() in {"true", "1"},
             int(os.getenv("DB_POOL_MAX", "10")),
-            origins or ("*",),
         )
