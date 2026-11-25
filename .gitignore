@@ -26,8 +26,9 @@ build/
 # 部署与数据库临时文件
 .db_pwd.tmp
 
-# 编辑器与系统杂项
-.vscode/
+# 编辑器与系统杂项（只保留共享的 VS Code 设置）
+.vscode/*
+!.vscode/settings.json
 .idea/
 .DS_Store
 Thumbs.db
