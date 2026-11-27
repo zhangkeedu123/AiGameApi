@@ -1,19 +1,23 @@
 import asyncio
 import copy
+import io
 import json
 import os
 import shutil
 import unittest
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import asyncpg
 from httpx import ASGITransport, AsyncClient
+from PIL import Image
 
 from app.create_admin import insert_admin
 from app.main import create_app
 from app.security import hash_password
+from app.services.campaign import current_month
 from app.settings import Settings
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -75,6 +79,79 @@ class PostgreSQLTest(unittest.IsolatedAsyncioTestCase):
             transport=ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test"
         )
 
+    async def test_daily_collection_and_repeat_redemption(self):
+        from datetime import timedelta
+        from app.services.collection import today
+
+        app = create_app(self.settings)
+        async with app.router.lifespan_context(app), self.client(app) as client:
+            csrf = await self.login(client)
+            admin_headers = {"X-CSRF-Token": csrf}
+            source = io.BytesIO()
+            Image.new("RGB", (80, 100), "teal").save(source, format="PNG")
+            draft = await client.post("/admin/levels/generate", headers=admin_headers,
+                                      files={"image": ("vase.png", source.getvalue(), "image/png")},
+                                      data={"name": "瓷器", "pieces": "5", "category": "normal"})
+            self.assertEqual(draft.status_code, 201, draft.text)
+            level_id = draft.json()["id"]
+            self.assertEqual((await client.post(f"/admin/levels/{level_id}/publish", headers=admin_headers)).status_code, 200)
+            edited = await client.patch(f"/admin/levels/{level_id}", headers=admin_headers,
+                                        data={"name": "青瓷", "category": "hard", "story": "瓷器介绍"})
+            self.assertEqual(edited.status_code, 200, self.settings.error_log.read_text(encoding="utf-8") if edited.status_code == 500 else edited.text)
+            self.assertEqual((await client.delete(f"/admin/levels/{level_id}", headers=admin_headers)).status_code, 200)
+            self.assertEqual((await client.get("/api/v1/levels?category=hard")).json(), [])
+            self.assertEqual((await client.post(f"/admin/levels/{level_id}/publish", headers=admin_headers)).status_code, 200)
+            self.assertEqual((await client.get("/api/v1/levels?category=hard")).json()[0]["category"], "hard")
+
+            guest = await client.post("/api/v1/me/guest", json={"device_id": "daily-test-device"})
+            self.assertEqual(guest.status_code, 200, guest.text)
+            player = guest.json()
+            headers = {"Authorization": f"Bearer {player['token']}"}
+            daily = (await client.post("/api/v1/me/daily/start", headers=headers)).json()
+            group = {"ids": list(range(len(daily["level"]["shards"]))), "x": 10, "y": 10, "turn": 0}
+            proof = {"date": daily["date"], "group": group, "elapsed_ms": 1200}
+            wrong_day = {**proof, "date": (today() - timedelta(days=1)).isoformat()}
+            self.assertEqual((await client.post("/api/v1/me/daily/complete", headers=headers, json=wrong_day)).status_code, 409)
+            for response in await asyncio.gather(*(client.post("/api/v1/me/daily/complete", headers=headers, json=proof) for _ in range(2))):
+                self.assertEqual(response.status_code, 200, response.text)
+            collection = (await client.get("/api/v1/me/collection", headers=headers)).json()
+            self.assertEqual(len(collection["items"]), 1)
+            self.assertEqual(collection["balance"], 1)
+            recorded = collection["items"][0]
+            reopened = (await client.post("/api/v1/me/daily/start", headers=headers)).json()
+            self.assertEqual(recorded["completed_at"], reopened["completed_at"])
+            self.assertIsNotNone(datetime.fromisoformat(recorded["completed_at"]).utcoffset())
+
+            async with app.state.db.acquire() as conn, conn.transaction():
+                for offset in range(1, 61):
+                    day = today() - timedelta(days=offset)
+                    await conn.execute("INSERT INTO daily_editions VALUES ($1, $2)", day, level_id)
+                    await conn.execute("""
+                        INSERT INTO daily_attempts (user_id, day, completed_at, elapsed_ms, porcelain_name)
+                        VALUES ($1, $2, now(), 1200, '青瓷')
+                    """, UUID(player["id"]), day)
+            claim = {"request_id": "test-request-one-0001", "recipient": "收件人",
+                     "phone": "13800138000", "address": "某市某区某路 100 号"}
+            endpoint = "/api/v1/me/collection/redemptions"
+            first, retry = await asyncio.gather(*(client.post(endpoint, headers=headers, json=claim) for _ in range(2)))
+            self.assertEqual(first.status_code, 201, first.text)
+            self.assertEqual(first.json()["id"], retry.json()["id"])
+            second = await client.post(endpoint, headers=headers, json={**claim, "request_id": "test-request-two-0002"})
+            self.assertEqual(second.status_code, 201, second.text)
+            rejected = await client.post(endpoint, headers=headers, json={**claim, "request_id": "test-request-three-0003"})
+            self.assertEqual(rejected.status_code, 409)
+            rows = (await client.get("/admin/redemptions", headers=admin_headers)).json()
+            self.assertEqual(rows["total"], 2)
+            self.assertTrue(all(row["address"] == claim["address"] for row in rows["items"]))
+            update = await client.patch("/admin/redemptions/" + first.json()["id"], headers=admin_headers,
+                                        data={"status": "shipped", "carrier": "顺丰", "tracking_number": "SF12345"})
+            self.assertEqual(update.status_code, 200, update.text)
+            latest = (await client.get("/api/v1/me/collection", headers=headers)).json()
+            self.assertEqual((len(latest["items"]), latest["balance"]), (61, 1))
+            delivered = next(row for row in latest["claims"] if row["id"] == first.json()["id"])
+            self.assertEqual(delivered["tracking_number"], "SF12345")
+            self.assertNotIn("address", delivered)
+
     async def login(self, client):
         data = {"username": "admin", "password": PASSWORD}
         self.assertEqual((await client.post("/admin/login", data=data, headers={"X-CSRF-Token": "bad"})).status_code, 403)
@@ -94,6 +171,107 @@ class PostgreSQLTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(issued.status_code, 200, issued.text)
         self.assertEqual(issued.headers["cache-control"], "no-store")
         return {"Authorization": "Bearer " + issued.json()["token"]}
+
+    async def test_angular_regeneration_and_monthly_reward(self):
+        app = create_app(self.settings)
+        async with app.router.lifespan_context(app), self.client(app) as client:
+            headers = {"X-CSRF-Token": await self.login(client)}
+            source = io.BytesIO()
+            Image.new("RGBA", (120, 150), "#387b69").save(source, format="PNG")
+            raw = source.getvalue()
+
+            async def add_level(number):
+                response = await client.post("/admin/levels/generate", headers=headers,
+                                             files={"image": ("test-vase.png", raw, "image/png")},
+                                             data={"name": f"瓷器 {number}", "pieces": 7, "level_number": number,
+                                                   "rotate_count": 3, "decoy_count": 2})
+                self.assertEqual(response.status_code, 201, response.text)
+                level_id = response.json()["id"]
+                self.assertEqual((await client.post(f"/admin/levels/{level_id}/publish", headers=headers)).status_code, 200)
+                return level_id
+
+            async def guest(device):
+                response = await client.post("/api/v1/me/guest", json={"device_id": device})
+                self.assertEqual(response.status_code, 200, response.text)
+                return response.json()
+
+            first, other, fastest = [await guest(f"monthly-guest-{i}") for i in range(3)]
+            auth = {"Authorization": "Bearer " + fastest["token"]}
+            level6 = await add_level(6)
+            daily = (await client.post("/api/v1/me/daily/start", headers=auth)).json()
+            level5 = await add_level(5)
+            rows = (await client.get("/api/v1/levels?category=normal")).json()
+            self.assertEqual([r["level_number"] for r in rows], [5, 6])
+            old = (await client.get(f"/api/v1/levels/{level6}")).json()
+            self.assertEqual((len(old["shards"]), old["rotate_count"], old["decoy_count"]), (9, 3, 2))
+            self.assertTrue(any(len(seam["poly"]) > 4 for seam in old["seams"]))
+            self.assertTrue(all(max(s["ids"]) < 7 for s in old["seams"]))
+            self.assertTrue(all(min(shard["sprite"][2:]) > 0 for shard in old["shards"]))
+            for seam in old["seams"]:
+                for index in seam["ids"]:
+                    poly = old["shards"][index]["poly"]
+                    vertices = list(zip(poly[::2], poly[1::2]))
+                    self.assertTrue(all(p in vertices for p in zip(seam["poly"][::2], seam["poly"][1::2])))
+            original_key = await app.state.db.fetchval("SELECT original_key FROM levels WHERE id = $1", UUID(level6))
+            self.assertEqual((self.settings.upload_dir / original_key).read_bytes(), raw)
+
+            edited = await client.patch(f"/admin/levels/{level6}", headers=headers,
+                                        data={"name": "重新生成", "category": "normal", "pieces": 12,
+                                              "rotate_count": 5, "decoy_count": 4, "atlas_version": 1})
+            self.assertEqual(edited.status_code, 200, edited.text)
+            new = (await client.get(f"/api/v1/levels/{level6}")).json()
+            self.assertEqual((new["atlas_version"], len(new["shards"]), new["rotate_count"]), (2, 16, 5))
+            self.assertEqual((await client.get(f"/api/v1/levels/{level6}/atlas.png?v=1")).status_code, 200)
+            reopened = (await client.post("/api/v1/me/daily/start", headers=auth)).json()
+            self.assertEqual(reopened["level"]["atlas_version"], 1)
+            group = {"ids": list(range(7)), "x": 10, "y": 20, "turn": 0}
+            self.assertEqual((await client.post("/api/v1/me/daily/complete", headers=auth,
+                               json={"date": daily["date"], "group": group, "elapsed_ms": 800})).status_code, 200)
+
+            first_url = f"/api/v1/me/campaign/levels/{level5}/start"
+            next_url = f"/api/v1/me/campaign/levels/{level6}/start"
+            self.assertEqual((await client.post(next_url, headers=auth)).status_code, 403)
+            started = await client.post(first_url, headers=auth)
+            self.assertEqual(started.status_code, 200, started.text)
+            finish = "/api/v1/me/campaign/attempts/" + started.json()["id"] + "/complete"
+            proof = {"group": group, "elapsed_ms": 1200}
+            self.assertEqual((await client.post(finish, headers=auth, json=proof)).status_code, 200)
+            self.assertEqual((await client.post(next_url, headers=auth)).status_code, 200)
+            live = (await client.get("/api/v1/ranking")).json()
+            self.assertEqual(live["items"][0]["level_number"], 5)
+            self.assertIsNone(live["winner"])
+
+            prior = current_month() - timedelta(days=1)
+            old_time = datetime(prior.year, prior.month, 10, 10, tzinfo=UTC)
+            for account, level_id, number, elapsed in [(first, level5, 5, 1000), (other, level6, 6, 6000),
+                                                       (fastest, level6, 6, 5000)]:
+                await app.state.db.execute("""
+                    INSERT INTO campaign_attempts (id, user_id, level_id, category, level_number, atlas_version,
+                        piece_count, completed_at, elapsed_ms)
+                    VALUES ($1, $2, $3, 'normal', $4, 1, 7, $5, $6)
+                """, uuid4(), UUID(account["id"]), UUID(level_id), number, old_time, elapsed)
+            month = prior.strftime("%Y-%m")
+            ranked = await client.get("/api/v1/ranking", params={"month": month})
+            self.assertEqual(ranked.status_code, 200, ranked.text)
+            self.assertEqual([(r["level_number"], r["elapsed_ms"]) for r in ranked.json()["items"]],
+                             [(6, 5000), (6, 6000), (5, 1000)])
+            self.assertFalse(ranked.json()["winner"]["claimed"])
+            collection = (await client.get("/api/v1/me/collection", headers=auth)).json()
+            self.assertEqual(len(collection["awards"]), 1)
+            self.assertEqual(collection["balance"], 1)
+            claim = {"request_id": "test-monthly-claim-1", "reward_month": month, "recipient": "测试",
+                     "phone": "13800138000", "address": "测试省测试区测试路 123 号"}
+            url = "/api/v1/me/collection/redemptions"
+            rejected = await client.post(url, json=claim, headers={"Authorization": "Bearer " + other["token"]})
+            self.assertEqual(rejected.status_code, 409)
+            first_claim = await client.post(url, json=claim, headers=auth)
+            self.assertEqual(first_claim.status_code, 201, first_claim.text)
+            self.assertEqual((await client.post(url, json=claim, headers=auth)).json()["id"], first_claim.json()["id"])
+            self.assertEqual((await client.post(url, json={**claim, "request_id": "test-monthly-claim-2"},
+                                               headers=auth)).status_code, 409)
+            collection = (await client.get("/api/v1/me/collection", headers=auth)).json()
+            self.assertEqual(collection["balance"], 1)
+            self.assertEqual(collection["awards"], [])
 
     async def test_generated_artwork_and_ranking(self):
         app = create_app(self.settings)

@@ -22,6 +22,7 @@ class Shard(InputModel):
     box: Box
     poly: list[Coordinate]
     sprite: Rect
+    contours: list[list[Index]] | None = None
 
 
 class Seam(InputModel):
@@ -34,9 +35,13 @@ class LevelConfig(InputModel):
     difficulty: Annotated[str, Field(min_length=1, max_length=80)]
     story: Annotated[str, Field(max_length=4000)]
     rotations: Turn
+    rotate_count: Annotated[int, Field(ge=0, le=256)] | None = None
+    decoy_count: Annotated[int, Field(ge=0, le=16)] = 0
+    cutout: bool = False
     snapDistance: Annotated[Coordinate, Field(gt=0)]
     poster: Rect
     outline: list[Coordinate]
+    contours: list[list[Index]] | None = None
     shards: Annotated[list[Shard], Field(min_length=1, max_length=256)]
     seams: list[Seam]
     points: Annotated[list[Point], Field(max_length=3)]

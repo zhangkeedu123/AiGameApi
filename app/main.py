@@ -16,7 +16,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.api_guide import API_GUIDE
 from app.db import connect_pool
 from app.openapi import build_openapi
-from app.routes import admin, api
+from app.routes import admin, api, campaign, collection
 from app.settings import Settings
 
 # Swagger UI 资源随代码分发，内网和国内网络都不必再访问 jsdelivr 之类的 CDN。
@@ -79,6 +79,8 @@ def create_app(settings: Settings | None = None):
     app.add_middleware(PrivateResponseHeaders)
     app.include_router(admin.router)
     app.include_router(api.router)
+    app.include_router(collection.router)
+    app.include_router(campaign.router)
 
     if (SWAGGER_ASSETS / "swagger-ui-bundle.js").is_file():
         app.mount("/static/swagger", StaticFiles(directory=SWAGGER_ASSETS), name="swagger-ui")

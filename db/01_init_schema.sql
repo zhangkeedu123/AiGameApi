@@ -93,4 +93,96 @@ CREATE TABLE IF NOT EXISTS admins (
 
 COMMENT ON TABLE admins IS '后台管理员，密码以 bcrypt 摘要保存';
 
+-- 已有库重跑脚本时，旧关卡归入普通分类。
+ALTER TABLE levels ADD COLUMN IF NOT EXISTS category varchar(16) NOT NULL DEFAULT 'normal'
+    CHECK (category IN ('normal', 'hard', 'extreme'));
+
+CREATE TABLE IF NOT EXISTS daily_editions (
+    day date PRIMARY KEY,
+    level_id uuid NOT NULL REFERENCES levels (id)
+);
+
+CREATE TABLE IF NOT EXISTS daily_attempts (
+    user_id uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    day date NOT NULL REFERENCES daily_editions (day),
+    started_at timestamptz NOT NULL DEFAULT now(),
+    completed_at timestamptz,
+    elapsed_ms integer CHECK (elapsed_ms BETWEEN 0 AND 86400000),
+    porcelain_name varchar(120),
+    PRIMARY KEY (user_id, day),
+    CHECK ((completed_at IS NULL AND elapsed_ms IS NULL AND porcelain_name IS NULL)
+        OR (completed_at IS NOT NULL AND elapsed_ms IS NOT NULL AND porcelain_name IS NOT NULL))
+);
+
+CREATE TABLE IF NOT EXISTS porcelain_redemptions (
+    id uuid PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES users (id),
+    request_id varchar(100) NOT NULL,
+    recipient varchar(60) NOT NULL,
+    phone varchar(20) NOT NULL,
+    address varchar(240) NOT NULL,
+    status varchar(16) NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'processing', 'shipped', 'delivered')),
+    carrier varchar(80),
+    tracking_number varchar(100),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (user_id, request_id),
+    CHECK (status NOT IN ('shipped', 'delivered') OR (carrier IS NOT NULL AND tracking_number IS NOT NULL))
+);
+
+CREATE INDEX IF NOT EXISTS porcelain_redemptions_status_created_idx
+    ON porcelain_redemptions (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS porcelain_redemptions_created_idx
+    ON porcelain_redemptions (created_at DESC);
+
+ALTER TABLE levels ADD COLUMN IF NOT EXISTS level_number integer CHECK (level_number > 0);
+ALTER TABLE levels ADD COLUMN IF NOT EXISTS atlas_version integer NOT NULL DEFAULT 1;
+ALTER TABLE levels ADD COLUMN IF NOT EXISTS original_key text;
+
+UPDATE levels SET level_number = sort_order WHERE level_number IS NULL AND status = 'published';
+CREATE UNIQUE INDEX IF NOT EXISTS levels_category_number_key ON levels (category, level_number);
+
+CREATE TABLE IF NOT EXISTS level_versions (
+    level_id uuid NOT NULL REFERENCES levels (id) ON DELETE CASCADE,
+    version integer NOT NULL,
+    storage_key text NOT NULL,
+    config jsonb NOT NULL,
+    PRIMARY KEY (level_id, version)
+);
+ALTER TABLE daily_editions ADD COLUMN IF NOT EXISTS atlas_version integer NOT NULL DEFAULT 1;
+
+CREATE TABLE IF NOT EXISTS campaign_attempts (
+    id uuid PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    level_id uuid NOT NULL REFERENCES levels (id),
+    category varchar(16) NOT NULL,
+    level_number integer NOT NULL,
+    atlas_version integer NOT NULL,
+    piece_count integer NOT NULL CHECK (piece_count > 0),
+    started_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    completed_at timestamptz,
+    elapsed_ms integer CHECK (elapsed_ms > 0),
+    CHECK ((completed_at IS NULL) = (elapsed_ms IS NULL))
+);
+CREATE INDEX IF NOT EXISTS campaign_attempts_player_idx ON campaign_attempts (user_id, level_id)
+    WHERE completed_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS campaign_attempts_completed_idx ON campaign_attempts (completed_at)
+    WHERE completed_at IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS campaign_pending_attempt_key
+    ON campaign_attempts (user_id, level_id, atlas_version) WHERE completed_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS monthly_porcelain_awards (
+    month date PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES users (id),
+    category varchar(16) NOT NULL,
+    level_number integer NOT NULL,
+    elapsed_ms integer NOT NULL,
+    awarded_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE porcelain_redemptions ADD COLUMN IF NOT EXISTS reward_month date
+    REFERENCES monthly_porcelain_awards (month);
+CREATE UNIQUE INDEX IF NOT EXISTS porcelain_redemptions_month_key
+    ON porcelain_redemptions (reward_month) WHERE reward_month IS NOT NULL;
+
 COMMIT;

@@ -2,14 +2,17 @@ from secrets import token_urlsafe
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.openapi import error_response
 from app.schemas import GuestLogin, GuestSession, PlayerProfile, ProgressInput
 from app.security import player
+from app.services.collection import CATEGORY
 from app.services.players import get_profile, guest_user, record_login, update_token
 from app.services.progress import read_progress, save_progress
+from app.services.silhouette import with_silhouettes
 
 router = APIRouter(prefix="/api/v1")
 Player = Annotated[UUID, Depends(player)]
@@ -107,21 +110,23 @@ AUTH_RESPONSE = {
 | `sort_order` | integer | 第几关，从 1 开始连续 |
 | `published_at` | string(ISO 8601) | 发布时间（UTC） |
 | `difficulty` | string | 难度文案，取自关卡配置 |
+| `category` | string | 普通 normal、困难 hard、极难 extreme，可用同名查询参数筛选 |
 """,
     response_description="关卡摘要数组，没有已发布关卡时为空数组",
     responses={200: {"content": {"application/json": {"example": LEVEL_LIST_EXAMPLE}}}},
 )
-async def list_levels(request: Request):
+async def list_levels(request: Request, category: CATEGORY | None = None):
     rows = await request.app.state.db.fetch(
-        """SELECT id, name, sort_order, published_at, config->>'difficulty' AS difficulty
-           FROM levels WHERE status = 'published' AND config->>'archived' IS DISTINCT FROM 'true' ORDER BY sort_order"""
+        """SELECT id, name, category, sort_order, level_number, atlas_version, published_at, config->>'difficulty' AS difficulty
+           FROM levels WHERE status = 'published' AND config->>'archived' IS DISTINCT FROM 'true'
+           AND ($1::text IS NULL OR category = $1) ORDER BY level_number, category, sort_order""", category,
     )
     return [dict(row) for row in rows]
 
 
 async def published_level(request, level_id):
     row = await request.app.state.db.fetchrow(
-        """SELECT id, sort_order, published_at, config, storage_key
+        """SELECT id, category, sort_order, level_number, atlas_version, published_at, config, storage_key
            FROM levels WHERE id = $1 AND status = 'published'""", level_id,
     )
     if row is None:
@@ -172,10 +177,13 @@ async def published_level(request, level_id):
 )
 async def level_detail(request: Request, level_id: LevelId):
     row = await published_level(request, level_id)
+    path = request.app.state.settings.upload_dir / row["storage_key"]
+    config = await run_in_threadpool(with_silhouettes, row["config"], path)
     return {
-        **row["config"], "id": row["id"], "sort_order": row["sort_order"],
-        "published_at": row["published_at"],
-        "image": str(request.url_for("public_atlas", level_id=level_id)),
+        **config, "id": row["id"], "sort_order": row["sort_order"],
+        "published_at": row["published_at"], "category": row["category"],
+        "level_number": row["level_number"], "atlas_version": row["atlas_version"],
+        "image": str(request.url_for("public_atlas", level_id=level_id).include_query_params(v=row["atlas_version"])),
     }
 
 
@@ -201,8 +209,14 @@ async def level_detail(request: Request, level_id: LevelId):
         404: error_response("关卡不存在或未发布", "已发布关卡不存在", 404),
     },
 )
-async def public_atlas(request: Request, level_id: LevelId):
+async def public_atlas(request: Request, level_id: LevelId, v: int | None = Query(None, ge=1)):
     row = await published_level(request, level_id)
+    if v is not None and v != row["atlas_version"]:
+        row = await request.app.state.db.fetchrow("""
+            SELECT storage_key FROM level_versions WHERE level_id = $1 AND version = $2
+        """, level_id, v)
+        if row is None:
+            raise HTTPException(404, "该图集版本不存在")
     # 通过数据库查到的服务端存储键读取文件，上传目录不挂载为静态目录。
     path = request.app.state.settings.upload_dir / row["storage_key"]
     return FileResponse(path, media_type="image/png", headers={

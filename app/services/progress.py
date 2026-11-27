@@ -34,7 +34,7 @@ async def read_progress(db, user_id):
 async def save_progress(db, user_id, level_id, data):
     async with db.acquire() as conn, conn.transaction():
         level = await conn.fetchrow(
-            "SELECT sort_order, config FROM levels WHERE id = $1 AND status = 'published'", level_id
+            "SELECT sort_order, level_number, category, config FROM levels WHERE id = $1 AND status = 'published'", level_id
         )
         if level is None:
             raise HTTPException(404, "已发布关卡不存在")
@@ -45,21 +45,24 @@ async def save_progress(db, user_id, level_id, data):
         )
         if current is None:
             raise HTTPException(401, "玩家不可用")
-        if level["sort_order"] > 1 and not await conn.fetchval(
+        if level["level_number"] > 1 and not await conn.fetchval(
             """SELECT NOT EXISTS (SELECT 1 FROM levels prev WHERE prev.status='published'
-               AND prev.sort_order < $2 AND prev.config->>'archived' IS DISTINCT FROM 'true')
+               AND prev.category = $3 AND prev.level_number < $2 AND prev.config->>'archived' IS DISTINCT FROM 'true')
                OR EXISTS (SELECT 1 FROM user_level_progress p JOIN levels l ON l.id = p.level_id
-               WHERE p.user_id = $1 AND l.sort_order = (
-                   SELECT max(prev.sort_order) FROM levels prev WHERE prev.status='published'
-                   AND prev.sort_order < $2 AND prev.config->>'archived' IS DISTINCT FROM 'true'
+               WHERE p.user_id = $1 AND l.level_number = (
+                   SELECT max(prev.level_number) FROM levels prev WHERE prev.status='published'
+                   AND prev.category = $3 AND prev.level_number < $2 AND prev.config->>'archived' IS DISTINCT FROM 'true'
                ) AND p.first_completed_at IS NOT NULL)""",
-            user_id, level["sort_order"],
+            user_id, level["level_number"], level["category"],
         ):
             raise HTTPException(403, "关卡尚未解锁")
 
         config = level["config"]
         ids = [shard_id for group in data.groups for shard_id in group.ids]
-        if sorted(ids) != list(range(len(config["shards"]))):
+        real_count = len(config["shards"]) - config.get("decoy_count", 0)
+        if sorted(ids) not in (list(range(len(config["shards"]))), list(range(real_count))) or (
+            len(ids) == real_count and real_count != len(config["shards"]) and len(data.groups) != 1
+        ):
             raise HTTPException(422, "groups.ids 必须无重复地覆盖所有碎片")
         if data.paint and len(data.groups) != 1:
             raise HTTPException(422, "paint 仅在碎片合成一组后可保存")
