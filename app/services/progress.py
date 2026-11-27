@@ -34,7 +34,8 @@ async def read_progress(db, user_id):
 async def save_progress(db, user_id, level_id, data):
     async with db.acquire() as conn, conn.transaction():
         level = await conn.fetchrow(
-            "SELECT sort_order, level_number, category, config FROM levels WHERE id = $1 AND status = 'published'", level_id
+            """SELECT sort_order, level_number, category, config FROM levels
+               WHERE id = $1 AND status = 'published' AND category <> 'daily'""", level_id
         )
         if level is None:
             raise HTTPException(404, "已发布关卡不存在")

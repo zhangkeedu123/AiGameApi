@@ -94,8 +94,10 @@ CREATE TABLE IF NOT EXISTS admins (
 COMMENT ON TABLE admins IS '后台管理员，密码以 bcrypt 摘要保存';
 
 -- 已有库重跑脚本时，旧关卡归入普通分类。
-ALTER TABLE levels ADD COLUMN IF NOT EXISTS category varchar(16) NOT NULL DEFAULT 'normal'
-    CHECK (category IN ('normal', 'hard', 'extreme'));
+ALTER TABLE levels ADD COLUMN IF NOT EXISTS category varchar(16) NOT NULL DEFAULT 'normal';
+ALTER TABLE levels DROP CONSTRAINT IF EXISTS levels_category_check;
+ALTER TABLE levels ADD CONSTRAINT levels_category_check
+    CHECK (category IN ('normal', 'hard', 'extreme', 'daily'));
 
 CREATE TABLE IF NOT EXISTS daily_editions (
     day date PRIMARY KEY,

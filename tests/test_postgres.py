@@ -107,7 +107,24 @@ class PostgreSQLTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(guest.status_code, 200, guest.text)
             player = guest.json()
             headers = {"Authorization": f"Bearer {player['token']}"}
+            daily_url = "/api/v1/me/daily/start"
+            self.assertIsNone((await client.post(daily_url, headers=headers)).json()["level"])
+            daily_draft = await client.post("/admin/levels/generate", headers=admin_headers,
+                                            files={"image": ("vase.png", source.getvalue(), "image/png")},
+                                            data={"name": "每日青瓷", "pieces": "5", "category": "daily"})
+            self.assertEqual(daily_draft.status_code, 201, daily_draft.text)
+            level_id = daily_draft.json()["id"]
+            self.assertIsNone((await client.post(daily_url, headers=headers)).json()["level"])
+            self.assertEqual((await client.post(f"/admin/levels/{level_id}/publish", headers=admin_headers)).status_code, 200)
+            self.assertEqual([r["id"] for r in (await client.get("/api/v1/levels?category=daily")).json()], [level_id])
+            self.assertNotIn(level_id, [r["id"] for r in (await client.get("/api/v1/levels")).json()])
+            campaign = await client.post(f"/api/v1/me/campaign/levels/{level_id}/start", headers=headers)
+            self.assertEqual(campaign.status_code, 404)
             daily = (await client.post("/api/v1/me/daily/start", headers=headers)).json()
+            self.assertEqual((daily["level"]["id"], daily["level"]["category"]), (level_id, "daily"))
+            self.assertEqual((await client.delete(f"/admin/levels/{level_id}", headers=admin_headers)).status_code, 200)
+            self.assertEqual((await client.get("/api/v1/levels?category=daily")).json(), [])
+            self.assertEqual((await client.post(daily_url, headers=headers)).json()["level"]["id"], level_id)
             group = {"ids": list(range(len(daily["level"]["shards"]))), "x": 10, "y": 10, "turn": 0}
             proof = {"date": daily["date"], "group": group, "elapsed_ms": 1200}
             wrong_day = {**proof, "date": (today() - timedelta(days=1)).isoformat()}
@@ -180,10 +197,10 @@ class PostgreSQLTest(unittest.IsolatedAsyncioTestCase):
             Image.new("RGBA", (120, 150), "#387b69").save(source, format="PNG")
             raw = source.getvalue()
 
-            async def add_level(number):
+            async def add_level(number, category="normal"):
                 response = await client.post("/admin/levels/generate", headers=headers,
                                              files={"image": ("test-vase.png", raw, "image/png")},
-                                             data={"name": f"瓷器 {number}", "pieces": 7, "level_number": number,
+                                             data={"name": f"瓷器 {number}", "pieces": 7, "level_number": number, "category": category,
                                                    "rotate_count": 3, "decoy_count": 2})
                 self.assertEqual(response.status_code, 201, response.text)
                 level_id = response.json()["id"]
@@ -198,6 +215,7 @@ class PostgreSQLTest(unittest.IsolatedAsyncioTestCase):
             first, other, fastest = [await guest(f"monthly-guest-{i}") for i in range(3)]
             auth = {"Authorization": "Bearer " + fastest["token"]}
             level6 = await add_level(6)
+            daily_level = await add_level(6, "daily")
             daily = (await client.post("/api/v1/me/daily/start", headers=auth)).json()
             level5 = await add_level(5)
             rows = (await client.get("/api/v1/levels?category=normal")).json()
@@ -215,13 +233,13 @@ class PostgreSQLTest(unittest.IsolatedAsyncioTestCase):
             original_key = await app.state.db.fetchval("SELECT original_key FROM levels WHERE id = $1", UUID(level6))
             self.assertEqual((self.settings.upload_dir / original_key).read_bytes(), raw)
 
-            edited = await client.patch(f"/admin/levels/{level6}", headers=headers,
-                                        data={"name": "重新生成", "category": "normal", "pieces": 12,
+            edited = await client.patch(f"/admin/levels/{daily_level}", headers=headers,
+                                        data={"name": "重新生成", "category": "daily", "pieces": 12,
                                               "rotate_count": 5, "decoy_count": 4, "atlas_version": 1})
             self.assertEqual(edited.status_code, 200, edited.text)
-            new = (await client.get(f"/api/v1/levels/{level6}")).json()
+            new = (await client.get(f"/api/v1/levels/{daily_level}")).json()
             self.assertEqual((new["atlas_version"], len(new["shards"]), new["rotate_count"]), (2, 16, 5))
-            self.assertEqual((await client.get(f"/api/v1/levels/{level6}/atlas.png?v=1")).status_code, 200)
+            self.assertEqual((await client.get(f"/api/v1/levels/{daily_level}/atlas.png?v=1")).status_code, 200)
             reopened = (await client.post("/api/v1/me/daily/start", headers=auth)).json()
             self.assertEqual(reopened["level"]["atlas_version"], 1)
             group = {"ids": list(range(7)), "x": 10, "y": 20, "turn": 0}

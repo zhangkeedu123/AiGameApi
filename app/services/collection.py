@@ -10,7 +10,7 @@ from app.schemas import Group, InputModel
 from app.services.campaign import month_date, settle_months
 from app.services.silhouette import with_silhouettes
 
-CATEGORY = Literal["normal", "hard", "extreme"]
+CATEGORY = Literal["normal", "hard", "extreme", "daily"]
 SHIPMENT_STATUS = Literal["pending", "processing", "shipped", "delivered"]
 COST = 30
 BEIJING = timezone(timedelta(hours=8))
@@ -53,8 +53,8 @@ async def start_daily(db, user_id, upload_dir):
         )
         if edition is None:
             ids = await conn.fetch("""
-                SELECT id, atlas_version FROM levels WHERE status = 'published'
-                    AND config->>'archived' IS DISTINCT FROM 'true' ORDER BY level_number, category, id
+                SELECT id, atlas_version FROM levels WHERE status = 'published' AND category = 'daily'
+                    AND config->>'archived' IS DISTINCT FROM 'true' ORDER BY level_number, id
             """)
             if not ids:
                 return {"date": day, "level": None}

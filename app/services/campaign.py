@@ -41,7 +41,8 @@ async def start_campaign(db, user_id, level_id):
     row = await db.fetchrow("""
         SELECT id, category, level_number, atlas_version,
             jsonb_array_length(config->'shards') - coalesce((config->>'decoy_count')::int, 0) AS pieces
-        FROM levels WHERE id = $1 AND status = 'published' AND config->>'archived' IS DISTINCT FROM 'true'
+        FROM levels WHERE id = $1 AND status = 'published' AND category <> 'daily'
+            AND config->>'archived' IS DISTINCT FROM 'true'
     """, level_id)
     if row is None:
         raise HTTPException(404, "该关卡暂无开放")

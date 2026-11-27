@@ -110,7 +110,7 @@ AUTH_RESPONSE = {
 | `sort_order` | integer | 第几关，从 1 开始连续 |
 | `published_at` | string(ISO 8601) | 发布时间（UTC） |
 | `difficulty` | string | 难度文案，取自关卡配置 |
-| `category` | string | 普通 normal、困难 hard、极难 extreme，可用同名查询参数筛选 |
+| `category` | string | 普通 normal、困难 hard、极难 extreme、每日一瓷 daily。默认列出闯关关卡，指定 daily 可单独查看每日关卡 |
 """,
     response_description="关卡摘要数组，没有已发布关卡时为空数组",
     responses={200: {"content": {"application/json": {"example": LEVEL_LIST_EXAMPLE}}}},
@@ -119,7 +119,8 @@ async def list_levels(request: Request, category: CATEGORY | None = None):
     rows = await request.app.state.db.fetch(
         """SELECT id, name, category, sort_order, level_number, atlas_version, published_at, config->>'difficulty' AS difficulty
            FROM levels WHERE status = 'published' AND config->>'archived' IS DISTINCT FROM 'true'
-           AND ($1::text IS NULL OR category = $1) ORDER BY level_number, category, sort_order""", category,
+           AND (($1::text IS NULL AND category <> 'daily') OR category = $1)
+           ORDER BY level_number, category, sort_order""", category,
     )
     return [dict(row) for row in rows]
 
